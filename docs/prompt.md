@@ -22,7 +22,13 @@ Sistema que ayuda a usuarios a tramitar la gestoría de su acta de nacimiento en
 - Panel web proveedor: páginas Next.js (App Router) con **Auth.js v5 (`next-auth@beta`)**, provider Credentials (email + contraseña `bcryptjs`), tabla `Proveedor`, sesión JWT en cookie (sin adapter de DB). Ver Regla 5.
 - Validación: Zod
 - Tests: **Vitest**
-- Despliegue: Vercel (entorno de pruebas, sin VPS por ahora)
+- Despliegue: **Vercel** (repo de GitHub conectado, auto-deploy), DB en
+  **Supabase cloud**, dominio `*.vercel.app`, un solo bot (@GestoriaMX_bot). El
+  webhook se registra con `npm run webhook:set` (`scripts/telegram-webhook.mjs`).
+  `GET /api/health` valida deploy + DB. En prod, `/api/dev/solicitudes` y
+  `/simular_pago` están deshabilitados: el puente es la acción admin
+  **"Enviar a proveedor"** en `/admin/solicitudes` (hasta que exista la pasarela
+  de pago). Runbook completo en el README.
 - Todos los Route Handlers que tocan Prisma deben declarar `export const runtime = 'nodejs'` y `export const dynamic = 'force-dynamic'` (Prisma no corre en el runtime Edge).
 
 ## Variables de entorno (`.env.example`)

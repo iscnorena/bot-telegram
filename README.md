@@ -150,6 +150,45 @@ se revisa lo entregado contra lo que factura el proveedor:
 | `scripts/crear-usuario.mjs` | Alta de cuentas (`--rol admin|proveedor`) por CLI. |
 | `test/` | Vitest con Prisma falso en memoria; sin llamadas reales de red. |
 
+## Despliegue en Vercel + Supabase cloud
+
+Destino: **Vercel** (repo de GitHub conectado, auto-deploy en cada push a `main`),
+DB en **Supabase cloud**, dominio `*.vercel.app`, y **@GestoriaMX_bot** para prod.
+
+1. **Supabase**: crear proyecto (región *East US*, para emparejar con Vercel
+   `iad1`). De *Settings → Database → Connection string* saca:
+   - `DATABASE_URL` = *Transaction pooler* (`:6543`) **+ `?pgbouncer=true&connection_limit=1`**
+   - `DIRECT_URL` = *Session / Direct* (`:5432`) — solo para migraciones.
+2. **Migrar prod** (desde tu máquina, con esas cadenas en el entorno):
+   ```bash
+   DATABASE_URL="<pooled>" DIRECT_URL="<direct>" npx prisma migrate deploy
+   DATABASE_URL="<pooled>" DIRECT_URL="<direct>" node scripts/crear-usuario.mjs --email admin@tu.mx --nombre "Admin" --rol admin
+   DATABASE_URL="<pooled>" DIRECT_URL="<direct>" node scripts/crear-usuario.mjs --email prov@tu.mx  --nombre "Proveedor" --rol proveedor
+   ```
+3. **Vercel**: importar `iscnorena/bot-telegram` (Next.js autodetectado). Variables
+   de entorno (Production): `DATABASE_URL`, `DIRECT_URL`, `TELEGRAM_BOT_TOKEN`,
+   `TELEGRAM_WEBHOOK_SECRET`, `PROVEEDOR_TELEGRAM_CHAT_ID`,
+   `ADMIN_TELEGRAM_CHAT_ID`, `AUTH_SECRET`. Deploy.
+4. **Verificar**: `GET https://<app>.vercel.app/api/health` → `{ ok: true }`;
+   entrar a `/proveedor/login` y `/admin`.
+5. **Webhook**:
+   ```bash
+   WEBHOOK_BASE_URL="https://<app>.vercel.app" npm run webhook:set
+   npm run webhook:info        # url correcta, sin last_error
+   ```
+6. **End-to-end en prod**: `/start` en Telegram → CURP → `/admin/solicitudes` →
+   *Enviar a proveedor* → entrega por panel o Telegram → el usuario recibe el PDF
+   → conciliar en `/admin/cortes/<lunes>`.
+
+> El webhook es único: mientras apunte a Vercel, los mensajes reales van a prod.
+> Para desarrollar contra Telegram real en local: `npm run webhook:delete` o
+> `WEBHOOK_BASE_URL=<túnel> npm run webhook:set`. El testeo local por `curl` al
+> endpoint sigue funcionando siempre.
+>
+> En prod, `/api/dev/solicitudes` y `/simular_pago` están deshabilitados; el
+> puente es la acción **Enviar a proveedor** en `/admin/solicitudes` (hasta que
+> exista la pasarela de pago).
+
 ## Fuera de alcance en esta fase
 
 Pasarela de pago real (se simula con `/simular_pago`), registro/gestión de

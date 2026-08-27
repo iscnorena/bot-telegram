@@ -9,6 +9,7 @@ vi.mock("next/navigation", () => ({
 
 import { auth } from "@/auth";
 import { requireAdmin, requireProveedor } from "@/lib/sesion";
+import { enviarAProveedorAction } from "@/app/admin/actions";
 
 const mockAuth = auth as unknown as ReturnType<typeof vi.fn>;
 
@@ -33,5 +34,12 @@ describe("guards de sesión", () => {
   it("requireProveedor acepta cualquier sesión", async () => {
     mockAuth.mockResolvedValue({ user: { id: "2", role: "proveedor" } });
     await expect(requireProveedor()).resolves.toMatchObject({ id: "2" });
+  });
+
+  it("enviarAProveedorAction rechaza sin rol admin", async () => {
+    mockAuth.mockResolvedValue({ user: { id: "2", role: "proveedor" } });
+    const fd = new FormData();
+    fd.set("solicitudId", "1");
+    await expect(enviarAProveedorAction(fd)).rejects.toThrow("REDIRECT:/proveedor");
   });
 });

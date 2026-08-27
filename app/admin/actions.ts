@@ -12,6 +12,7 @@ import {
 } from "@/lib/services/conciliacionService";
 import { ponerTarifa } from "@/lib/services/tarifaService";
 import { actualizarServicio } from "@/lib/services/servicioService";
+import { enviarAProveedor } from "@/lib/services/solicitudService";
 
 function n(formData: FormData, k: string): number {
   return Number(formData.get(k));
@@ -52,6 +53,19 @@ export async function reabrirCorteAction(formData: FormData): Promise<void> {
   if (Number.isSafeInteger(corteId)) await reabrirCorte(corteId, Number(admin.id));
   revalidatePath(`/admin/cortes/${formData.get("semana")}`);
   revalidatePath("/admin");
+}
+
+/**
+ * Puente hasta que exista la pasarela de pago: marca la solicitud como pagada y
+ * la envía al proveedor.
+ */
+export async function enviarAProveedorAction(formData: FormData): Promise<void> {
+  await requireAdmin();
+  const solicitudId = n(formData, "solicitudId");
+  if (Number.isSafeInteger(solicitudId)) {
+    await enviarAProveedor(solicitudId);
+  }
+  revalidatePath("/admin/solicitudes");
 }
 
 export async function ponerTarifaAction(formData: FormData): Promise<void> {

@@ -51,6 +51,7 @@ export default async function AdminLayout({
       </header>
       <nav className="panel__nav">
         <Link href="/admin">Cortes</Link>
+        <Link href="/admin/solicitudes">Solicitudes</Link>
         <Link href="/admin/tarifas">Tarifas</Link>
         <Link href="/admin/servicios">Servicios</Link>
       </nav>
