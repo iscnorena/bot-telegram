@@ -1,0 +1,62 @@
+// Bot de Telegram para gestoría de acta de nacimiento.
+// Regla de arquitectura: NUNCA se persiste el PDF del acta; solo se guarda el
+// `file_id` de Telegram como referencia.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model Solicitud {
+  id                 Int             @id @default(autoincrement())
+  chatIdUsuario      BigInt          @map("chat_id_usuario")
+  curp               String          @db.VarChar(18) // se guarda SIEMPRE normalizada a mayúsculas
+  nombre             String?
+  apellidoPaterno    String?         @map("apellido_paterno")
+  apellidoMaterno    String?         @map("apellido_materno")
+  estado             EstadoSolicitud @default(pendiente_curp)
+  metodoEntrega      String?         @map("metodo_entrega") // 'telegram_proveedor' | 'panel_web'
+  fileIdEntregado    String?         @map("file_id_entregado") // solo referencia de Telegram, nunca el archivo
+  proveedorId        Int?            @map("proveedor_id")
+  pagadoAt           DateTime?       @map("pagado_at")
+  enviadoProveedorAt DateTime?       @map("enviado_proveedor_at")
+  entregadoAt        DateTime?       @map("entregado_at")
+  createdAt          DateTime        @default(now()) @map("created_at")
+  updatedAt          DateTime        @updatedAt @map("updated_at")
+
+  logs SolicitudLog[]
+
+  @@index([curp])
+  @@index([chatIdUsuario])
+  @@index([estado])
+  @@map("solicitudes")
+}
+
+enum EstadoSolicitud {
+  pendiente_curp
+  pagado
+  enviado_proveedor
+  entregando // transitorio: una entrega fue reclamada y sendDocument está en curso
+  no_encontrado_proveedor // interno: el proveedor no lo encontró, pero puede reintentar
+  entregado // cerrado
+  no_encontrado // cerrado (final, se avisa al usuario)
+}
+
+model SolicitudLog {
+  id          Int      @id @default(autoincrement())
+  solicitudId Int      @map("solicitud_id")
+  canal       String // 'telegram_proveedor' | 'panel_web' | 'sistema'
+  accion      String // 'creada' | 'notificacion_proveedor' | 'entrega' | 'entrega_rechazada' | 'no_encontrado' | 'comando_no_encontrado' | 'error'
+  detalle     String?  @db.Text
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  solicitud Solicitud @relation(fields: [solicitudId], references: [id])
+
+  @@index([solicitudId])
+  @@map("solicitud_logs")
+}
