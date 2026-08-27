@@ -35,7 +35,7 @@ npm run dev               # http://localhost:3000
 
 | Variable | Cómo obtenerla |
 |---|---|
-| `DATABASE_URL` | La imprime `npx supabase start` (Postgres local `127.0.0.1:54322`). En prod: cadena *pooled* (PgBouncer, `:6543`) del proyecto Supabase. |
+| `DATABASE_URL` | La imprime `npx supabase start` (Postgres local `127.0.0.1:55322`). En prod: cadena *pooled* (PgBouncer, `:6543`) del proyecto Supabase. |
 | `DIRECT_URL` | Igual que `DATABASE_URL` en local. En prod: conexión directa (`:5432`). Solo se usa para migraciones. |
 | `TELEGRAM_BOT_TOKEN` | `@BotFather` → `/newbot`. |
 | `TELEGRAM_WEBHOOK_SECRET` | Una cadena aleatoria que tú eliges. Valida el webhook y protege el endpoint dev. |
