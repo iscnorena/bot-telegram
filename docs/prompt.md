@@ -13,9 +13,10 @@ Sistema que ayuda a usuarios a tramitar la gestoría de su acta de nacimiento en
 
 ## Stack técnico
 - Framework: Next.js 14+ (App Router), TypeScript
-- Base de datos: MySQL (PlanetScale o Railway, host externo) vía Prisma ORM
+- Base de datos: **Supabase (PostgreSQL)** vía Prisma ORM
+  - `datasource db`: `provider = "postgresql"`, `url = env("DATABASE_URL")` (conexión *pooled* / PgBouncer, puerto 6543, con `?pgbouncer=true&connection_limit=1`) y `directUrl = env("DIRECT_URL")` (conexión directa, puerto 5432, solo para migraciones).
   - Cliente Prisma como **singleton** en `lib/prisma.ts` (evita agotar conexiones en serverless).
-  - Para MySQL de host externo, usar `connection_limit` bajo en el `DATABASE_URL` (p. ej. `?connection_limit=5`).
+  - Desarrollo local: Supabase local vía Docker (`npx supabase start`); imprime las cadenas de conexión (Postgres en `127.0.0.1:54322`). El proyecto Supabase en la nube solo se necesita al desplegar en Vercel.
 - Bot: Telegram Bot API vía webhook — Route Handler en `app/api/telegram/webhook/route.ts`
 - **Storage de archivos: NINGUNO.** Los PDFs nunca se persisten en el backend — ver sección "Manejo de archivos sin storage" abajo.
 - Panel web proveedor: páginas Next.js (App Router) con Auth.js (NextAuth) para login con roles — **fuera de alcance en esta sesión**
@@ -28,7 +29,8 @@ Sistema que ayuda a usuarios a tramitar la gestoría de su acta de nacimiento en
 
 | Variable | Uso |
 |---|---|
-| `DATABASE_URL` | Conexión MySQL para Prisma. Incluir `connection_limit` bajo. |
+| `DATABASE_URL` | Conexión Postgres *pooled* (PgBouncer) para Prisma en runtime. `?pgbouncer=true&connection_limit=1`. |
+| `DIRECT_URL` | Conexión Postgres directa, solo para `prisma migrate` / `prisma db push`. |
 | `TELEGRAM_BOT_TOKEN` | Token del bot para todas las llamadas a la Bot API. |
 | `TELEGRAM_WEBHOOK_SECRET` | Valor esperado en el header `X-Telegram-Bot-Api-Secret-Token` del webhook. También protege el endpoint dev. |
 | `PROVEEDOR_TELEGRAM_CHAT_ID` | `chat.id` autorizado como proveedor (documentos y comando `NO`). |
@@ -230,7 +232,7 @@ Encapsular llamadas a la Bot API usando `fetch` nativo y `TELEGRAM_BOT_TOKEN`:
 - Al construir payloads, convertir cualquier `BigInt` (`chatId`) a `string`/`Number` explícitamente.
 
 ## Qué construir en esta sesión
-1. `lib/prisma.ts` (singleton de `PrismaClient`) + `schema.prisma` con el modelo de arriba + conexión a MySQL externo.
+1. `lib/prisma.ts` (singleton de `PrismaClient`) + `prisma/schema.prisma` con el modelo de arriba, `provider = "postgresql"`, `url`/`directUrl`.
 2. `lib/services/telegramService.ts` (sin método de descarga de archivos).
 3. `lib/services/entregaActaService.ts` con el patrón claim atómico (`entregando`) descrito en la Regla 3.
 4. `app/api/telegram/webhook/route.ts` — validación de secret, autorización de proveedor, manejo de documentos (file_id directo, reglas de caption) y del comando `NO <id|CURP>`; siempre responde 200; `runtime='nodejs'`.
