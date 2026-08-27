@@ -1,6 +1,8 @@
 import { bot } from "@/lib/copy";
-import { MAX_REINTENTOS_CURP, PRECIO_GESTORIA } from "@/lib/config";
+import { MAX_REINTENTOS_CURP } from "@/lib/config";
 import { esCurpValida } from "@/lib/curp";
+import { mxn } from "@/lib/dinero";
+import { servicioPorDefecto } from "@/lib/services/servicioService";
 import {
   quitarTeclado,
   tecladoMenu,
@@ -110,10 +112,15 @@ export async function manejarMensajeUsuario(
 
     if (estado.paso === "esperando_curp") {
       const solicitud = await crearSolicitud({ chatId, curp: texto });
+      const servicio = await servicioPorDefecto();
       await resetMenu(chatId, solicitud.id);
       await responder(
         chatId,
-        bot.solicitudRegistrada(solicitud.id, PRECIO_GESTORIA, enDev()),
+        bot.solicitudRegistrada(
+          solicitud.id,
+          mxn(servicio.precioUsuario),
+          enDev(),
+        ),
         tecladoMenu(),
       );
       return;

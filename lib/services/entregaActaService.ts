@@ -96,6 +96,18 @@ export async function entregarConEnvio(
   try {
     const fileIdEntregado = await enviar(previo.chatIdUsuario);
 
+    // Si no se sabe qué proveedor entregó (flujo Telegram) y hay exactamente
+    // uno activo, se asigna; si hay varios, queda null y el admin lo asigna.
+    let proveedorId = opts.proveedorId;
+    if (!proveedorId) {
+      const activos = await prisma.usuario.findMany({
+        where: { rol: "proveedor", activo: true },
+        select: { id: true },
+        take: 2,
+      });
+      if (activos.length === 1) proveedorId = activos[0].id;
+    }
+
     await prisma.solicitud.update({
       where: { id: solicitudId },
       data: {
@@ -103,7 +115,7 @@ export async function entregarConEnvio(
         entregadoAt: new Date(),
         fileIdEntregado,
         metodoEntrega: canal,
-        ...(opts.proveedorId ? { proveedorId: opts.proveedorId } : {}),
+        ...(proveedorId ? { proveedorId } : {}),
       },
     });
 

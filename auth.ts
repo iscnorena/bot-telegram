@@ -20,19 +20,20 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         if (!parsed.success) return null;
 
         const email = parsed.data.email.toLowerCase();
-        const proveedor = await prisma.proveedor.findUnique({ where: { email } });
-        if (!proveedor || !proveedor.activo) return null;
+        const usuario = await prisma.usuario.findUnique({ where: { email } });
+        if (!usuario || !usuario.activo) return null;
 
         const ok = await bcrypt.compare(
           parsed.data.password,
-          proveedor.passwordHash,
+          usuario.passwordHash,
         );
         if (!ok) return null;
 
         return {
-          id: String(proveedor.id),
-          email: proveedor.email,
-          name: proveedor.nombre,
+          id: String(usuario.id),
+          email: usuario.email,
+          name: usuario.nombre,
+          role: usuario.rol,
         };
       },
     }),

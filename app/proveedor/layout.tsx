@@ -1,4 +1,4 @@
-import "./proveedor.css";
+import "../panel.css";
 import type { ReactNode } from "react";
 import { auth } from "@/auth";
 import { panel } from "@/lib/copy";

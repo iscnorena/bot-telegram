@@ -16,7 +16,8 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio",
-    "proveedor:crear": "node --env-file=.env scripts/crear-proveedor.mjs",
+    "usuario:crear": "node --env-file=.env scripts/crear-usuario.mjs",
+    "proveedor:crear": "node --env-file=.env scripts/crear-usuario.mjs --rol proveedor",
     "db:local": "supabase start",
     "db:local:stop": "supabase stop"
   },

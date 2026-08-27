@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { signOut } from "@/auth";
-import { requireProveedor } from "@/lib/proveedorSesion";
+import { requireProveedor } from "@/lib/sesion";
 import { entregaActaService } from "@/lib/services/entregaActaService";
 
 export async function marcarNoEncontradaAction(formData: FormData): Promise<void> {

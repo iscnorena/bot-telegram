@@ -20,20 +20,33 @@ model Solicitud {
   apellidoPaterno    String?         @map("apellido_paterno")
   apellidoMaterno    String?         @map("apellido_materno")
   estado             EstadoSolicitud @default(pendiente_curp)
+  servicioId         Int?            @map("servicio_id") // null = servicio por defecto
   metodoEntrega      String?         @map("metodo_entrega") // 'telegram_proveedor' | 'panel_web'
   fileIdEntregado    String?         @map("file_id_entregado") // solo referencia de Telegram, nunca el archivo
-  proveedorId        Int?            @map("proveedor_id")
+  proveedorId        Int?            @map("proveedor_id") // Usuario con rol 'proveedor'
   pagadoAt           DateTime?       @map("pagado_at")
   enviadoProveedorAt DateTime?       @map("enviado_proveedor_at")
   entregadoAt        DateTime?       @map("entregado_at")
-  createdAt          DateTime        @default(now()) @map("created_at")
-  updatedAt          DateTime        @updatedAt @map("updated_at")
 
-  logs SolicitudLog[]
+  // Conciliación semanal contra la factura del proveedor
+  costoProveedorEsperado Decimal?  @db.Decimal(10, 2) @map("costo_proveedor_esperado") // congelado al cerrar el corte
+  costoProveedorReal     Decimal?  @db.Decimal(10, 2) @map("costo_proveedor_real")     // captura manual del admin
+  facturadoAt            DateTime? @map("facturado_at")
+  facturadoPor           Int?      @map("facturado_por")
+  corteId               Int?      @map("corte_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  logs     SolicitudLog[]
+  servicio Servicio?      @relation(fields: [servicioId], references: [id])
+  proveedor Usuario?      @relation(fields: [proveedorId], references: [id])
+  corte    Corte?         @relation(fields: [corteId], references: [id])
 
   @@index([curp])
   @@index([chatIdUsuario])
   @@index([estado])
+  @@index([entregadoAt])
   @@map("solicitudes")
 }
 
@@ -50,8 +63,8 @@ enum EstadoSolicitud {
 model SolicitudLog {
   id          Int      @id @default(autoincrement())
   solicitudId Int      @map("solicitud_id")
-  canal       String // 'telegram_proveedor' | 'panel_web' | 'sistema'
-  accion      String // 'creada' | 'notificacion_proveedor' | 'entrega' | 'entrega_rechazada' | 'no_encontrado' | 'comando_no_encontrado' | 'error'
+  canal       String // 'telegram_proveedor' | 'panel_web' | 'sistema' | 'admin'
+  accion      String
   detalle     String?  @db.Text
   createdAt   DateTime @default(now()) @map("created_at")
 
@@ -61,16 +74,20 @@ model SolicitudLog {
   @@map("solicitud_logs")
 }
 
-model Proveedor {
+model Usuario {
   id           Int      @id @default(autoincrement())
   email        String   @unique
   passwordHash String   @map("password_hash")
   nombre       String
+  rol          String   @default("proveedor") // 'admin' | 'proveedor'
   activo       Boolean  @default(true)
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 
-  @@map("proveedores")
+  tarifas     Tarifa[]
+  solicitudes Solicitud[]
+
+  @@map("usuarios")
 }
 
 // Estado de la conversación de Telegram por chat (Telegram no guarda estado).
@@ -82,4 +99,55 @@ model Conversacion {
   updatedAt   DateTime @updatedAt @map("updated_at")
 
   @@map("conversaciones")
+}
+
+model Servicio {
+  id            Int      @id @default(autoincrement())
+  slug          String   @unique // 'acta_nacimiento'
+  nombre        String
+  precioUsuario Decimal  @db.Decimal(10, 2) @map("precio_usuario")
+  activo        Boolean  @default(true)
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  tarifas     Tarifa[]
+  solicitudes Solicitud[]
+
+  @@map("servicios")
+}
+
+// Costo que cobra el proveedor por trámite, con historial de vigencias.
+model Tarifa {
+  id           Int       @id @default(autoincrement())
+  usuarioId    Int       @map("usuario_id") // proveedor
+  servicioId   Int       @map("servicio_id")
+  monto        Decimal   @db.Decimal(10, 2)
+  vigenteDesde DateTime  @map("vigente_desde")
+  vigenteHasta DateTime? @map("vigente_hasta") // null = vigente
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  usuario  Usuario  @relation(fields: [usuarioId], references: [id])
+  servicio Servicio @relation(fields: [servicioId], references: [id])
+
+  @@index([usuarioId, servicioId, vigenteDesde])
+  @@map("tarifas")
+}
+
+// Corte semanal (lunes–domingo, hora de Ciudad de México) para conciliar.
+model Corte {
+  id              Int       @id @default(autoincrement())
+  inicio          DateTime // lunes 00:00 CDMX, guardado en UTC
+  fin             DateTime // domingo 23:59:59.999 CDMX, guardado en UTC
+  cerradoAt       DateTime? @map("cerrado_at")
+  cerradoPor      Int?      @map("cerrado_por")
+  totalEntregadas Int?      @map("total_entregadas")
+  totalEsperado   Decimal?  @db.Decimal(12, 2) @map("total_esperado")
+  totalReal       Decimal?  @db.Decimal(12, 2) @map("total_real")
+  totalDiferencia Decimal?  @db.Decimal(12, 2) @map("total_diferencia")
+  createdAt       DateTime  @default(now()) @map("created_at")
+
+  solicitudes Solicitud[]
+
+  @@unique([inicio, fin])
+  @@map("cortes")
 }

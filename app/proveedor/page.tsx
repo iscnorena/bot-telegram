@@ -1,6 +1,6 @@
 import { EstadoSolicitud } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { requireProveedor } from "@/lib/proveedorSesion";
+import { requireProveedor } from "@/lib/sesion";
 import { panel } from "@/lib/copy";
 import { marcarNoEncontradaAction } from "./actions";
 

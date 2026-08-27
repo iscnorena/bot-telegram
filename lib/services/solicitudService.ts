@@ -2,6 +2,7 @@ import { EstadoSolicitud, type Solicitud } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { env } from "@/lib/env";
 import { telegramService } from "@/lib/services/telegramService";
+import { servicioPorDefecto } from "@/lib/services/servicioService";
 import { notificacionProveedor } from "@/lib/copy";
 import { normalizarCurp } from "@/lib/curp";
 
@@ -21,11 +22,13 @@ export async function crearSolicitud(args: {
   chatId: bigint;
   curp: string;
 }): Promise<Solicitud> {
+  const servicio = await servicioPorDefecto();
   const solicitud = await prisma.solicitud.create({
     data: {
       chatIdUsuario: args.chatId,
       curp: normalizarCurp(args.curp),
       estado: EstadoSolicitud.pendiente_curp,
+      servicioId: servicio.id,
     },
   });
   await prisma.solicitudLog.create({

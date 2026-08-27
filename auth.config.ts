@@ -10,17 +10,25 @@ export const authConfig = {
   session: { strategy: "jwt" },
   callbacks: {
     authorized({ auth, request: { nextUrl } }) {
-      const logueado = !!auth?.user;
-      const enPanel =
-        nextUrl.pathname.startsWith("/proveedor") &&
-        nextUrl.pathname !== "/proveedor/login";
-      if (enPanel) return logueado;
+      const { pathname } = nextUrl;
+
+      if (pathname.startsWith("/admin")) {
+        if (auth?.user?.role === "admin") return true;
+        if (auth?.user) return Response.redirect(new URL("/proveedor", nextUrl));
+        return false; // sin sesión -> a la pantalla de login
+      }
+      if (
+        pathname.startsWith("/proveedor") &&
+        pathname !== "/proveedor/login"
+      ) {
+        return !!auth?.user;
+      }
       return true;
     },
     jwt({ token, user }) {
       if (user) {
         token.id = user.id;
-        token.role = "proveedor";
+        token.role = user.role ?? "proveedor";
       }
       return token;
     },
