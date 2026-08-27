@@ -59,11 +59,35 @@ interface TelegramMessage {
   document?: { file_id: string; file_unique_id: string };
 }
 
+/** ReplyKeyboardMarkup con las opciones del menú del bot. */
+export function tecladoMenu(): unknown {
+  return {
+    keyboard: [
+      [{ text: "📄 Iniciar trámite de gestoría" }],
+      [{ text: "🔎 Consultar estado" }],
+    ],
+    resize_keyboard: true,
+    is_persistent: true,
+  };
+}
+
+/** Quita el teclado (para pasos donde se espera texto libre, p. ej. la CURP). */
+export function quitarTeclado(): unknown {
+  return { remove_keyboard: true };
+}
+
 export const telegramService = {
-  async sendMessage(args: { chatId: ChatId; text: string }): Promise<void> {
+  async sendMessage(args: {
+    chatId: ChatId;
+    text: string;
+    replyMarkup?: unknown;
+    parseMode?: "Markdown" | "MarkdownV2" | "HTML";
+  }): Promise<void> {
     await callJson("sendMessage", {
       chat_id: toChatId(args.chatId),
       text: args.text,
+      ...(args.parseMode ? { parse_mode: args.parseMode } : {}),
+      ...(args.replyMarkup ? { reply_markup: args.replyMarkup } : {}),
     });
   },
 

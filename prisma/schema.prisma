@@ -72,3 +72,14 @@ model Proveedor {
 
   @@map("proveedores")
 }
+
+// Estado de la conversación de Telegram por chat (Telegram no guarda estado).
+model Conversacion {
+  chatId      BigInt   @id @map("chat_id")
+  paso        String   @default("menu") // menu | esperando_curp | esperando_curp_consulta
+  solicitudId Int?     @map("solicitud_id")
+  intentos    Int      @default(0) // reintentos de CURP inválida en el paso actual
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("conversaciones")
+}

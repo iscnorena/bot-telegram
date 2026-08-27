@@ -32,9 +32,18 @@ export interface LogRow {
   createdAt: Date;
 }
 
+export interface ConversacionRow {
+  chatId: bigint;
+  paso: string;
+  solicitudId: number | null;
+  intentos: number;
+  updatedAt: Date;
+}
+
 interface Store {
   rows: Map<number, SolicitudRow>;
   logs: LogRow[];
+  conversaciones: Map<string, ConversacionRow>;
   nextSolicitudId: number;
   nextLogId: number;
 }
@@ -42,6 +51,7 @@ interface Store {
 export const store: Store = {
   rows: new Map(),
   logs: [],
+  conversaciones: new Map(),
   nextSolicitudId: 1,
   nextLogId: 1,
 };
@@ -72,6 +82,7 @@ function baseRow(partial: Partial<SolicitudRow>): SolicitudRow {
 export function resetStore(seed: Array<Partial<SolicitudRow>> = []): SolicitudRow[] {
   store.rows.clear();
   store.logs = [];
+  store.conversaciones.clear();
   store.nextSolicitudId = 1;
   store.nextLogId = 1;
   return seed.map((s) => {
@@ -83,13 +94,31 @@ export function resetStore(seed: Array<Partial<SolicitudRow>> = []): SolicitudRo
   });
 }
 
-type EstadoWhere = string | { in?: string[] } | undefined;
+type EstadoWhere =
+  | string
+  | { in?: string[]; notIn?: string[] }
+  | undefined;
 
 function estadoMatches(rowEstado: string, cond: EstadoWhere): boolean {
   if (cond === undefined) return true;
   if (typeof cond === "string") return rowEstado === cond;
   if (Array.isArray(cond.in)) return cond.in.includes(rowEstado);
+  if (Array.isArray(cond.notIn)) return !cond.notIn.includes(rowEstado);
   return true;
+}
+
+interface SolicitudWhere {
+  curp?: string;
+  chatIdUsuario?: bigint;
+  estado?: EstadoWhere;
+}
+
+function solicitudMatches(r: SolicitudRow, w: SolicitudWhere): boolean {
+  if (w.curp !== undefined && r.curp !== w.curp) return false;
+  if (w.chatIdUsuario !== undefined && r.chatIdUsuario !== w.chatIdUsuario) {
+    return false;
+  }
+  return estadoMatches(r.estado, w.estado);
 }
 
 function project<T extends Record<string, unknown>>(
@@ -116,16 +145,25 @@ export const fakePrisma = {
     },
 
     async findMany(args: {
-      where?: { curp?: string; estado?: EstadoWhere };
+      where?: SolicitudWhere;
       orderBy?: { id?: "asc" | "desc" };
     }) {
-      let rows = [...store.rows.values()];
       const w = args.where ?? {};
-      if (w.curp !== undefined) rows = rows.filter((r) => r.curp === w.curp);
-      rows = rows.filter((r) => estadoMatches(r.estado, w.estado));
+      let rows = [...store.rows.values()].filter((r) => solicitudMatches(r, w));
       if (args.orderBy?.id === "desc") rows.sort((a, b) => b.id - a.id);
       else rows.sort((a, b) => a.id - b.id);
       return rows.map((r) => ({ ...r }));
+    },
+
+    async findFirst(args: {
+      where?: SolicitudWhere;
+      orderBy?: { id?: "asc" | "desc" };
+    }) {
+      const w = args.where ?? {};
+      let rows = [...store.rows.values()].filter((r) => solicitudMatches(r, w));
+      if (args.orderBy?.id === "desc") rows.sort((a, b) => b.id - a.id);
+      else rows.sort((a, b) => a.id - b.id);
+      return rows.length ? { ...rows[0] } : null;
     },
 
     async create(args: {
@@ -146,17 +184,46 @@ export const fakePrisma = {
     },
 
     async updateMany(args: {
-      where: { id?: number; estado?: EstadoWhere };
+      where: SolicitudWhere & { id?: number };
       data: Partial<SolicitudRow>;
     }) {
       let count = 0;
       for (const row of store.rows.values()) {
         if (args.where.id !== undefined && row.id !== args.where.id) continue;
-        if (!estadoMatches(row.estado, args.where.estado)) continue;
+        if (!solicitudMatches(row, args.where)) continue;
         Object.assign(row, args.data, { updatedAt: new Date() });
         count++;
       }
       return { count };
+    },
+  },
+
+  conversacion: {
+    async upsert(args: {
+      where: { chatId: bigint };
+      update: Partial<ConversacionRow>;
+      create: Partial<ConversacionRow> & { chatId: bigint };
+    }) {
+      const key = args.where.chatId.toString();
+      const existente = store.conversaciones.get(key);
+      if (existente) {
+        Object.assign(existente, args.update, { updatedAt: new Date() });
+        return { ...existente };
+      }
+      const row: ConversacionRow = {
+        chatId: args.create.chatId,
+        paso: args.create.paso ?? "menu",
+        solicitudId: args.create.solicitudId ?? null,
+        intentos: args.create.intentos ?? 0,
+        updatedAt: new Date(),
+      };
+      store.conversaciones.set(key, row);
+      return { ...row };
+    },
+
+    async findUnique(args: { where: { chatId: bigint } }) {
+      const row = store.conversaciones.get(args.where.chatId.toString());
+      return row ? { ...row } : null;
     },
   },
 
@@ -197,4 +264,10 @@ export function acciones(solicitudId: number): string[] {
 }
 export function estadoDe(id: number): string | undefined {
   return store.rows.get(id)?.estado;
+}
+export function conversacionDe(chatId: bigint | number): ConversacionRow | undefined {
+  return store.conversaciones.get(chatId.toString());
+}
+export function solicitudes(): SolicitudRow[] {
+  return [...store.rows.values()];
 }

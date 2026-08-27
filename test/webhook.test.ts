@@ -4,9 +4,11 @@ vi.mock("@/lib/prisma", async () => {
   const mod = await import("./helpers/fakePrisma");
   return { prisma: mod.fakePrisma };
 });
-vi.mock("@/lib/services/telegramService", async () => {
+vi.mock("@/lib/services/telegramService", async (importActual) => {
+  const actual =
+    await importActual<typeof import("@/lib/services/telegramService")>();
   const mod = await import("./helpers/fakeTelegram");
-  return { telegramService: mod.fakeTelegram };
+  return { ...actual, telegramService: mod.fakeTelegram };
 });
 
 import { POST } from "@/app/api/telegram/webhook/route";
@@ -55,7 +57,7 @@ describe("webhook Telegram", () => {
     expect(fakeTelegram.sendDocument).not.toHaveBeenCalled();
   });
 
-  it("remitente no autorizado: ignorado", async () => {
+  it("documento desde un remitente que no es el proveedor: no dispara entrega", async () => {
     const [s] = resetStore([{ estado: "enviado_proveedor" }]);
 
     const res = await POST(
@@ -178,11 +180,28 @@ describe("webhook Telegram", () => {
     expect(store.logs).toHaveLength(0);
   });
 
-  it("texto que no empieza con 'NO ': 200, sin ack ni efectos", async () => {
+  it("texto normal desde el chat del proveedor: va al flujo de usuario, no a acción de proveedor", async () => {
     const res = await POST(req({ message: { chat: { id: PROVEEDOR }, text: "hola" } }));
 
     expect(res.status).toBe(200);
-    expect(fakeTelegram.sendMessage).not.toHaveBeenCalled();
+    // el flujo de usuario responde algo; no se dispara entrega ni comando NO
+    expect(fakeTelegram.sendMessage).toHaveBeenCalled();
+    expect(fakeTelegram.sendDocument).not.toHaveBeenCalled();
+  });
+
+  it("'/start' desde el chat del proveedor: lo maneja el flujo de usuario", async () => {
+    const res = await POST(req({ message: { chat: { id: PROVEEDOR }, text: "/start" } }));
+
+    expect(res.status).toBe(200);
+    const ultimo = fakeTelegram.sendMessage.mock.calls.at(-1)?.[0]?.text ?? "";
+    expect(ultimo).toContain("gestoría de acta de nacimiento");
+  });
+
+  it("mensaje desde un chat que no es el proveedor: flujo de usuario", async () => {
+    const res = await POST(req({ message: { chat: { id: 424242 }, text: "/start" } }));
+
+    expect(res.status).toBe(200);
+    expect(fakeTelegram.sendMessage).toHaveBeenCalled();
     expect(fakeTelegram.sendDocument).not.toHaveBeenCalled();
   });
 
