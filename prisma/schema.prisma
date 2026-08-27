@@ -60,3 +60,15 @@ model SolicitudLog {
   @@index([solicitudId])
   @@map("solicitud_logs")
 }
+
+model Proveedor {
+  id           Int      @id @default(autoincrement())
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  nombre       String
+  activo       Boolean  @default(true)
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@map("proveedores")
+}

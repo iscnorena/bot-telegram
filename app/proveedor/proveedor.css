@@ -1,0 +1,129 @@
+.panel {
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color: #1a1a1a;
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 1.5rem 1rem 3rem;
+}
+.panel__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  border-bottom: 1px solid #e2e2e2;
+  padding-bottom: 0.75rem;
+  margin-bottom: 1.5rem;
+}
+.panel__brand {
+  font-weight: 600;
+}
+.panel__top form {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+.panel__user {
+  color: #555;
+  font-size: 0.9rem;
+}
+.panel__foot {
+  margin-top: 2.5rem;
+  color: #777;
+  font-size: 0.8rem;
+}
+.panel h1 {
+  font-size: 1.25rem;
+  margin: 0 0 0.25rem;
+}
+.panel__sub {
+  color: #666;
+  margin: 0 0 1.25rem;
+}
+.banner {
+  padding: 0.6rem 0.9rem;
+  border-radius: 6px;
+  margin-bottom: 1rem;
+  font-size: 0.9rem;
+}
+.banner--ok {
+  background: #e7f6ec;
+  color: #1a7f37;
+}
+.banner--err {
+  background: #fdecec;
+  color: #b42318;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+th,
+td {
+  text-align: left;
+  padding: 0.6rem 0.5rem;
+  border-bottom: 1px solid #ececec;
+  vertical-align: top;
+}
+th {
+  color: #555;
+  font-weight: 600;
+}
+.acciones {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.acciones form {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.btn {
+  border: 1px solid #c9c9c9;
+  background: #fff;
+  border-radius: 6px;
+  padding: 0.35rem 0.7rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.btn--primary {
+  background: #1a7f37;
+  border-color: #1a7f37;
+  color: #fff;
+}
+.btn--ghost {
+  background: transparent;
+}
+.estado {
+  display: inline-block;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  background: #eef;
+  color: #334;
+}
+
+/* login */
+.login {
+  max-width: 320px;
+  margin: 3rem auto;
+}
+.login label {
+  display: block;
+  font-size: 0.85rem;
+  color: #555;
+  margin: 0.75rem 0 0.25rem;
+}
+.login input {
+  width: 100%;
+  padding: 0.5rem;
+  border: 1px solid #c9c9c9;
+  border-radius: 6px;
+  font-size: 0.95rem;
+}
+.login button {
+  width: 100%;
+  margin-top: 1.25rem;
+}

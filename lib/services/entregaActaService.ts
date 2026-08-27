@@ -51,10 +51,16 @@ async function bestEffort(fn: () => Promise<unknown>): Promise<void> {
   }
 }
 
-export async function entregar(
+/**
+ * Núcleo de entrega con claim atómico y reversión. `enviar` hace el envío real
+ * (por `file_id` en el flujo Telegram, o binario en el flujo del panel) y
+ * devuelve el `file_id` resultante que Telegram asigna.
+ */
+export async function entregarConEnvio(
   solicitudId: number,
-  fileId: string,
   canal: string,
+  enviar: (chatId: bigint) => Promise<string>,
+  opts: { proveedorId?: number } = {},
 ): Promise<boolean> {
   const previo = await prisma.solicitud.findUnique({
     where: { id: solicitudId },
@@ -88,11 +94,7 @@ export async function entregar(
   }
 
   try {
-    const fileIdEntregado = await telegramService.sendDocument({
-      chatId: previo.chatIdUsuario,
-      fileId,
-      caption: CAPTION_ENTREGA,
-    });
+    const fileIdEntregado = await enviar(previo.chatIdUsuario);
 
     await prisma.solicitud.update({
       where: { id: solicitudId },
@@ -101,6 +103,7 @@ export async function entregar(
         entregadoAt: new Date(),
         fileIdEntregado,
         metodoEntrega: canal,
+        ...(opts.proveedorId ? { proveedorId: opts.proveedorId } : {}),
       },
     });
 
@@ -124,10 +127,21 @@ export async function entregar(
       solicitudId,
       canal,
       accion: "error",
-      detalle: `fallo sendDocument: ${(err as Error).message}`,
+      detalle: `fallo envío: ${(err as Error).message}`,
     });
     return false;
   }
+}
+
+/** Flujo Telegram: el proveedor reenvía un documento y tenemos su `file_id`. */
+export async function entregar(
+  solicitudId: number,
+  fileId: string,
+  canal: string,
+): Promise<boolean> {
+  return entregarConEnvio(solicitudId, canal, (chatId) =>
+    telegramService.sendDocument({ chatId, fileId, caption: CAPTION_ENTREGA }),
+  );
 }
 
 export async function marcarNoEncontrado(
@@ -186,4 +200,8 @@ export async function marcarNoEncontrado(
   return true;
 }
 
-export const entregaActaService = { entregar, marcarNoEncontrado };
+export const entregaActaService = {
+  entregar,
+  entregarConEnvio,
+  marcarNoEncontrado,
+};

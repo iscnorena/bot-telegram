@@ -12,6 +12,7 @@ const schema = z.object({
   TELEGRAM_WEBHOOK_SECRET: z.string().min(1),
   PROVEEDOR_TELEGRAM_CHAT_ID: z.string().min(1),
   ADMIN_TELEGRAM_CHAT_ID: z.string().min(1),
+  AUTH_SECRET: z.string().min(1),
 });
 
 export type Env = z.infer<typeof schema>;

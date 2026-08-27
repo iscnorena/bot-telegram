@@ -85,11 +85,20 @@ export const telegramService = {
   },
 
   /**
-   * Variante pass-through para el panel web (subida `multipart/form-data`).
-   * El endpoint que lo usa está fuera de alcance, pero el método existe.
-   * El `FormData` debe traer al menos `chat_id` y `document`.
+   * Pass-through para el panel web: recibe el binario (un `Blob`/`File`) y lo
+   * reenvía como `multipart/form-data` a `sendDocument`. El binario NO se
+   * persiste en ningún lado. Devuelve el `file_id` que Telegram asigna.
    */
-  async sendDocumentForm(form: FormData): Promise<string> {
+  async sendDocumentBinary(args: {
+    chatId: ChatId;
+    file: Blob;
+    filename: string;
+    caption?: string;
+  }): Promise<string> {
+    const form = new FormData();
+    form.append("chat_id", String(toChatId(args.chatId)));
+    form.append("document", args.file, args.filename);
+    if (args.caption) form.append("caption", args.caption);
     const msg = await callForm<TelegramMessage>("sendDocument", form);
     return msg.document?.file_id ?? "";
   },

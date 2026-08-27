@@ -12,6 +12,44 @@ export const CAPTION_ENTREGA =
 export const AVISO_NO_ENCONTRADO_FINAL =
   "No fue posible completar la gestoría de tu acta de nacimiento. Te contactaremos para el reembolso.";
 
+/** Textos del panel web del proveedor. */
+export const panel = {
+  titulo: "Panel de gestoría de acta de nacimiento",
+  subtitulo: "Solicitudes pendientes de trámite",
+  login: {
+    titulo: "Acceso de proveedor",
+    email: "Correo",
+    password: "Contraseña",
+    entrar: "Entrar",
+    error: "Correo o contraseña incorrectos.",
+  },
+  cerrarSesion: "Cerrar sesión",
+  columnas: {
+    id: "ID",
+    curp: "CURP",
+    nombre: "Nombre",
+    estado: "Estado",
+    recibida: "Recibida",
+    acciones: "Acciones",
+  },
+  subirPdf: "Entregar acta (PDF)",
+  marcarNoEncontrada: "Marcar como no encontrada",
+  sinPendientes: "No hay solicitudes pendientes.",
+  ok: {
+    entregada: (id: number) =>
+      `Solicitud #${id}: acta entregada al solicitante.`,
+    noEncontrada: (id: number) =>
+      `Solicitud #${id}: marcada como no encontrada. Puedes reintentar más tarde.`,
+  },
+  err: {
+    faltaArchivo: "Adjunta el PDF del acta.",
+    noPdf: "El archivo debe ser un PDF.",
+    muyGrande: "El PDF supera el tamaño máximo permitido (4 MB).",
+    noProcesada:
+      "No se pudo procesar la entrega: la solicitud ya está cerrada o en proceso.",
+  },
+};
+
 /** Mensaje al proveedor cuando entra una nueva solicitud. */
 export function notificacionProveedor(solicitudId: number, curp: string): string {
   return [

@@ -9,7 +9,11 @@ vi.mock("@/lib/services/telegramService", async () => {
   return { telegramService: mod.fakeTelegram };
 });
 
-import { entregar, marcarNoEncontrado } from "@/lib/services/entregaActaService";
+import {
+  entregar,
+  entregarConEnvio,
+  marcarNoEncontrado,
+} from "@/lib/services/entregaActaService";
 import { acciones, estadoDe, resetStore, store } from "./helpers/fakePrisma";
 import { config, fakeTelegram, resetFakeTelegram } from "./helpers/fakeTelegram";
 
@@ -84,6 +88,36 @@ describe("entregar", () => {
     expect(res).toBe(false);
     expect(estadoDe(s.id)).toBe("no_encontrado_proveedor");
     expect(acciones(s.id)).toContain("error");
+  });
+
+  it("entregarConEnvio: si el callback `enviar` lanza desde no_encontrado_proveedor, revierte a ese estado", async () => {
+    const [s] = resetStore([{ estado: "no_encontrado_proveedor" }]);
+
+    const res = await entregarConEnvio(s.id, "panel_web", async () => {
+      throw new Error("fallo de red simulado");
+    });
+
+    expect(res).toBe(false);
+    expect(estadoDe(s.id)).toBe("no_encontrado_proveedor");
+    expect(acciones(s.id)).toContain("error");
+  });
+
+  it("entregarConEnvio: éxito setea proveedorId y metodoEntrega", async () => {
+    const [s] = resetStore([{ estado: "enviado_proveedor" }]);
+
+    const res = await entregarConEnvio(
+      s.id,
+      "panel_web",
+      async () => "fid-xyz",
+      { proveedorId: 42 },
+    );
+
+    expect(res).toBe(true);
+    expect(estadoDe(s.id)).toBe("entregado");
+    const row = store.rows.get(s.id)!;
+    expect(row.metodoEntrega).toBe("panel_web");
+    expect(row.proveedorId).toBe(42);
+    expect(row.fileIdEntregado).toBe("fid-xyz");
   });
 });
 

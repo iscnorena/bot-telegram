@@ -6,3 +6,4 @@ process.env.TELEGRAM_BOT_TOKEN ??= "test-bot-token";
 process.env.TELEGRAM_WEBHOOK_SECRET ??= "test-secret";
 process.env.PROVEEDOR_TELEGRAM_CHAT_ID ??= "1000";
 process.env.ADMIN_TELEGRAM_CHAT_ID ??= "2000";
+process.env.AUTH_SECRET ??= "test-auth-secret-0123456789";
