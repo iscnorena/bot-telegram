@@ -43,29 +43,54 @@ npm run dev               # http://localhost:3000
 | `ADMIN_TELEGRAM_CHAT_ID` | `chat.id` que recibe las notificaciones de administración. |
 | `AUTH_SECRET` | Secreto de Auth.js para el panel web. Genera uno con `npx auth secret` o `openssl rand -base64 33`. |
 
-## Flujo manual (sin Telegram real)
+## Flujo del usuario en Telegram
 
-Con `npm run dev` corriendo y `.env` configurado:
+El bot guía a la persona con un menú de botones (ReplyKeyboard). Sin túnel se
+puede simular enviando updates al webhook:
 
 ```bash
-SECRET=... # el TELEGRAM_WEBHOOK_SECRET
+SECRET=... ; CHAT=<tu chat.id> ; B=localhost:3000
+post() { curl -s -X POST "$B/api/telegram/webhook" \
+  -H "x-telegram-bot-api-secret-token: $SECRET" -H 'content-type: application/json' \
+  -d "{\"message\":{\"chat\":{\"id\":$CHAT},\"text\":\"$1\"}}" ; }
 
-# 1. Simular el disparo a proveedor (crea la solicitud en 'enviado_proveedor')
+post "/start"                              # bienvenida + teclado
+post "📄 Iniciar trámite de gestoría"      # pide la CURP
+post "TEST900101HDFRXX09"                  # CURP válida -> crea solicitud (pendiente_curp)
+post "/simular_pago"                       # (dev) -> enviado_proveedor + avisa al proveedor
+post "🔎 Consultar estado"                 # pide la CURP
+post "TEST900101HDFRXX09"                  # muestra el estado del trámite
+```
+
+Luego el proveedor entrega (por Telegram o por el panel) y el bot reenvía el PDF
+al usuario. `estado` interno vs. lo que ve el usuario: solo `entregado` y
+`no_encontrado` generan aviso.
+
+> **Solapamiento de chat**: si `PROVEEDOR_TELEGRAM_CHAT_ID` es tu propio chat, los
+> **documentos** y los mensajes `NO ...` se tratan como acción de proveedor; todo
+> lo demás (incl. `/start`) va al flujo de usuario. Para probar ambos roles con
+> realismo usa una segunda cuenta de Telegram como usuaria.
+
+## Flujo del proveedor por Telegram (sin panel)
+
+```bash
+SECRET=... ; PROV=<PROVEEDOR_TELEGRAM_CHAT_ID>
+
+# Simular el disparo a proveedor de una vez (crea + envía)
 curl -s -X POST localhost:3000/api/dev/solicitudes \
   -H "x-dev-secret: $SECRET" -H 'content-type: application/json' \
-  -d '{"chatIdUsuario":"123456789","curp":"ABCD010203HDFXYZ09"}'
+  -d '{"chatIdUsuario":"123456789","curp":"TEST900101HDFRXX09"}'
 # -> { "id": 1, "estado": "enviado_proveedor" }
 
-# 2. Simular la entrega del proveedor (documento con caption = id)
+# Entrega: documento con caption = id de la solicitud
 curl -s -X POST localhost:3000/api/telegram/webhook \
   -H "x-telegram-bot-api-secret-token: $SECRET" -H 'content-type: application/json' \
-  -d '{"message":{"chat":{"id":<PROVEEDOR_CHAT_ID>},"document":{"file_id":"FID"},"caption":"1"}}'
-# -> la solicitud pasa a 'entregado'
+  -d "{\"message\":{\"chat\":{\"id\":$PROV},\"document\":{\"file_id\":\"FID\"},\"caption\":\"1\"}}"
 
-# 3. Simular "no encontrado" del proveedor (comando de texto)
+# No encontrado: comando de texto
 curl -s -X POST localhost:3000/api/telegram/webhook \
   -H "x-telegram-bot-api-secret-token: $SECRET" -H 'content-type: application/json' \
-  -d '{"message":{"chat":{"id":<PROVEEDOR_CHAT_ID>},"text":"NO 1"}}'
+  -d "{\"message\":{\"chat\":{\"id\":$PROV},\"text\":\"NO 1\"}}"
 ```
 
 Inspecciona el estado con `npx prisma studio`.
@@ -96,6 +121,9 @@ La subida entrega con `metodoEntrega = 'panel_web'` y guarda el `Proveedor.id` e
 | `lib/services/telegramService.ts` | Wrapper de la Bot API (sin descarga de archivos). |
 | `lib/services/resolverSolicitud.ts` | Resuelve un token `<id\|CURP>` (reuso webhook ↔ comando). |
 | `lib/services/entregaActaService.ts` | `entregarConEnvio` (claim atómico, estado `entregando`) + wrappers `entregar` / `marcarNoEncontrado`. |
+| `lib/bot/flujoUsuario.ts` | Máquina del flujo conversacional del usuario (menú, CURP, consulta, `/simular_pago`). |
+| `lib/services/conversacionService.ts` / `solicitudService.ts` | Estado de conversación por chat / crear-enviar-consultar solicitudes. |
+| `lib/curp.ts` | Validación y normalización de CURP (formato local, sin RENAPO). |
 | `auth.ts` / `auth.config.ts` / `middleware.ts` | Auth.js v5: Credentials + tabla `Proveedor`, sesión JWT; el middleware protege `/proveedor/**`. |
 | `app/proveedor/` | Panel del proveedor: `login`, lista de solicitudes, acciones. |
 | `app/api/proveedor/solicitudes/[id]/entregar/route.ts` | Subida del PDF (pass-through a Telegram). |
@@ -106,9 +134,9 @@ La subida entrega con `metodoEntrega = 'panel_web'` y guarda el `Proveedor.id` e
 
 ## Fuera de alcance en esta fase
 
-Flujo conversacional del usuario final, pasarela de pago, registro/gestión de
-cuentas de proveedor desde el navegador, y el comando del proveedor para el "no
-encontrado" **final**. Ver `docs/prompt.md`.
+Pasarela de pago real (se simula con `/simular_pago`), registro/gestión de
+cuentas de proveedor desde el navegador, panel de administración, y el cierre
+"no encontrado" **final**. Ver `docs/prompt.md`.
 
 ## Notas
 

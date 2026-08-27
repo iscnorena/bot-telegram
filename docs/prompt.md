@@ -109,6 +109,17 @@ model Proveedor {
 
   @@map("proveedores")
 }
+
+// Estado de la conversación de Telegram por chat (Telegram no guarda estado).
+model Conversacion {
+  chatId      BigInt   @id @map("chat_id")
+  paso        String   @default("menu") // menu | esperando_curp | esperando_curp_consulta
+  solicitudId Int?     @map("solicitud_id")
+  intentos    Int      @default(0) // reintentos de CURP inválida en el paso actual
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("conversaciones")
+}
 ```
 
 `Solicitud.proveedorId` (ya en el schema) se rellena con el `Proveedor.id` cuando la entrega se hace por el panel web.
@@ -149,17 +160,38 @@ Cualquier transición no listada es inválida y debe rechazarse (log `entrega_re
 ### 1. Estados internos vs. visibles al usuario
 `no_encontrado_proveedor` y `entregando` son estados INTERNOS — nunca se notifican al usuario. Solo `entregado` o `no_encontrado` generan aviso al usuario.
 
-### 2. Punto de disparo de notificación al proveedor + endpoint de simulación
-Cuando la solicitud pasa a `enviado_proveedor`, enviar automáticamente un mensaje de Telegram al proveedor (`PROVEEDOR_TELEGRAM_CHAT_ID`) con el ID de solicitud y la CURP.
+### 2. Flujo conversacional del usuario + disparo a proveedor
 
-Como la pasarela de pago está fuera de alcance, este punto se simula con:
+**Flujo en Telegram (`lib/bot/flujoUsuario.ts`, llamado desde el webhook):**
+- Menú con **ReplyKeyboard** (botones que envían texto): "📄 Iniciar trámite de
+  gestoría" y "🔎 Consultar estado".
+- `/start` (o texto vacío) → mensaje de bienvenida (copy legal + línea de
+  privacidad de la CURP) + teclado. `Conversacion.paso = 'menu'`.
+- **Iniciar** → `paso = 'esperando_curp'`; el siguiente texto se valida con
+  `esCurpValida` (`lib/curp.ts`, formato local de 18 chars con códigos de
+  entidad; **no** consulta RENAPO). Tras `MAX_REINTENTOS_CURP` CURP inválidas
+  vuelve al menú. CURP válida → `solicitudService.crearSolicitud` (estado
+  `pendiente_curp`, CURP normalizada, log `creada`) + mensaje de "solicitud
+  registrada, costo, instrucciones de pago".
+- **Consultar** → `paso = 'esperando_curp_consulta'`; con una CURP válida muestra
+  el estado (mapa `estado → texto amable`) de las solicitudes **de ese chat**
+  con esa CURP (privacidad: nunca las de otro chat).
+- `/simular_pago` (solo `NODE_ENV != production`) → avanza la solicitud abierta
+  del chat que esté en `pendiente_curp` llamando `solicitudService.enviarAProveedor`.
 
-**`app/api/dev/solicitudes/route.ts` (POST)** — crea una solicitud directamente en estado `enviado_proveedor`:
-- Body validado con Zod: `{ chatIdUsuario: number|string, curp: string, nombre?, apellidoPaterno?, apellidoMaterno? }`.
-- Normaliza `curp` a mayúsculas antes de guardar.
-- Protegido: exige header `X-Dev-Secret` (o `Authorization: Bearer ...`) igual a `TELEGRAM_WEBHOOK_SECRET`; responde 404/deshabilitado si `process.env.NODE_ENV === 'production'`.
-- Al crear: setea `enviadoProveedorAt = now()`, registra log `accion='creada'` y luego `accion='notificacion_proveedor'` (`canal='sistema'`), y dispara el `sendMessage` al proveedor.
-- `runtime = 'nodejs'`, `dynamic = 'force-dynamic'`.
+**`solicitudService.enviarAProveedor(id)`** (transición
+`pendiente_curp | pagado → enviado_proveedor`, `updateMany` condicional): setea
+`pagadoAt`/`enviadoProveedorAt`, log `notificacion_proveedor` (`canal='sistema'`),
+y `sendMessage` al proveedor (`PROVEEDOR_TELEGRAM_CHAT_ID`) con id + CURP.
+
+**`app/api/dev/solicitudes/route.ts` (POST)** — atajo para pruebas: crea y envía
+al proveedor en un paso (`crearSolicitud` + `enviarAProveedor`). Body Zod
+`{ chatIdUsuario, curp }`. Protegido con header `X-Dev-Secret` =
+`TELEGRAM_WEBHOOK_SECRET`; 404 si `NODE_ENV === 'production'`. `runtime='nodejs'`.
+
+**Enrutamiento en el webhook:** un mensaje se trata como **acción de proveedor**
+solo si viene de `PROVEEDOR_TELEGRAM_CHAT_ID` **y** es un documento o empieza con
+`NO `. Cualquier otro mensaje (de quien sea) va a `manejarMensajeUsuario`.
 
 ### 3. Servicio central `entregaActaService` (`lib/services/entregaActaService.ts`)
 
@@ -276,7 +308,9 @@ Aplica a: mensajes del bot, notificaciones al proveedor, textos del panel web, m
 
 ## Servicio de Telegram (`lib/services/telegramService.ts`)
 Encapsular llamadas a la Bot API usando `fetch` nativo y `TELEGRAM_BOT_TOKEN`:
-- `sendMessage({ chatId, text })`
+- `sendMessage({ chatId, text, replyMarkup?, parseMode? })` — `replyMarkup` se
+  serializa en `reply_markup`. Helpers `tecladoMenu()` (ReplyKeyboardMarkup) y
+  `quitarTeclado()`.
 - `sendDocument({ chatId, fileId, caption? })` — reenvío por `file_id`.
 - `sendDocumentBinary({ chatId, file, filename, caption? })` — pass-through del panel: arma el `FormData` internamente y devuelve el `file_id` resultante.
 - `notificarAdmin(text)` — `sendMessage` a `ADMIN_TELEGRAM_CHAT_ID`.
@@ -320,10 +354,23 @@ Encapsular llamadas a la Bot API usando `fetch` nativo y `TELEGRAM_BOT_TOKEN`:
     - archivo no-PDF o mayor a `MAX_PDF_BYTES` → `4xx`, sin llamar a Telegram;
     - solicitud ya cerrada → servicio devuelve `false`, redirect con `?error`;
     - `entregarConEnvio` con `enviar` que lanza desde `no_encontrado_proveedor` → revierte a ese estado.
+13. **Flujo conversacional del usuario:** modelo `Conversacion` + `lib/curp.ts` +
+    `lib/services/conversacionService.ts` + `lib/services/solicitudService.ts` +
+    `lib/bot/flujoUsuario.ts`; enrutamiento proveedor/usuario en el webhook;
+    comando dev `/simular_pago`; `PRECIO_GESTORIA`/`MAX_REINTENTOS_CURP` en `lib/config.ts`.
+14. **Tests Vitest — flujo usuario:**
+    - `/start` → bienvenida + teclado, `Conversacion` en `menu`;
+    - botón Iniciar → `esperando_curp`, pide CURP;
+    - CURP inválida × `MAX_REINTENTOS_CURP` → vuelve al menú;
+    - CURP válida (minúsculas) → crea `Solicitud` `pendiente_curp` (CURP en mayúsculas);
+    - `/simular_pago` → `enviado_proveedor` + notifica al proveedor + `pagoConfirmado`;
+    - Consultar + CURP propia → estado; CURP de otro chat → sin resultados (privacidad);
+    - texto no reconocido en `menu` → `noEntiendo`;
+    - webhook: `/start` desde el chat del proveedor → flujo de usuario (no se ignora).
 
 ## Fuera de alcance en esta sesión
-- Flujo conversacional completo del bot para el usuario final (menús, captura de CURP, consulta de CURP).
-- Integración de pasarela de pago (se simula con el endpoint dev).
+- Integración real de pasarela de pago (se simula con `/simular_pago` y el endpoint dev).
 - Registro público de proveedores y gestión de cuentas desde el navegador (el alta es por CLI).
-- Comando del proveedor para marcar `no_encontrado` **final** (`esFinal=true`); esta sesión solo cubre el marcado interno vía comando.
+- Panel de administración.
+- Comando/flujo para marcar `no_encontrado` **final** (`esFinal=true`); el sistema solo cubre el marcado interno.
 - Cualquier forma de storage o descarga de archivos — el sistema es intencionalmente "sin storage".
