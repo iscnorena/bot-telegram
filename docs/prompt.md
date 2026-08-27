@@ -19,7 +19,7 @@ Sistema que ayuda a usuarios a tramitar la gestoría de su acta de nacimiento en
   - Desarrollo local: Supabase local vía Docker (`npx supabase start`); imprime las cadenas de conexión (Postgres en `127.0.0.1:54322`). El proyecto Supabase en la nube solo se necesita al desplegar en Vercel.
 - Bot: Telegram Bot API vía webhook — Route Handler en `app/api/telegram/webhook/route.ts`
 - **Storage de archivos: NINGUNO.** Los PDFs nunca se persisten en el backend — ver sección "Manejo de archivos sin storage" abajo.
-- Panel web proveedor: páginas Next.js (App Router) con Auth.js (NextAuth) para login con roles — **fuera de alcance en esta sesión**
+- Panel web proveedor: páginas Next.js (App Router) con **Auth.js v5 (`next-auth@beta`)**, provider Credentials (email + contraseña `bcryptjs`), tabla `Proveedor`, sesión JWT en cookie (sin adapter de DB). Ver Regla 5.
 - Validación: Zod
 - Tests: **Vitest**
 - Despliegue: Vercel (entorno de pruebas, sin VPS por ahora)
@@ -35,6 +35,7 @@ Sistema que ayuda a usuarios a tramitar la gestoría de su acta de nacimiento en
 | `TELEGRAM_WEBHOOK_SECRET` | Valor esperado en el header `X-Telegram-Bot-Api-Secret-Token` del webhook. También protege el endpoint dev. |
 | `PROVEEDOR_TELEGRAM_CHAT_ID` | `chat.id` autorizado como proveedor (documentos y comando `NO`). |
 | `ADMIN_TELEGRAM_CHAT_ID` | `chat.id` al que se envían todas las notificaciones de `notificarAdmin`. |
+| `AUTH_SECRET` | Secreto de Auth.js v5 para firmar el JWT de sesión del panel. Generar con `npx auth secret`. |
 
 ## Manejo de archivos SIN storage (regla crítica de arquitectura)
 El sistema nunca guarda una copia del PDF del acta en ningún storage propio (ni local, ni S3/R2, ni base de datos). Solo se guarda una **referencia** (`file_id` de Telegram), nunca el binario. Dos casos:
@@ -96,7 +97,21 @@ model SolicitudLog {
   @@index([solicitudId])
   @@map("solicitud_logs")
 }
+
+model Proveedor {
+  id           Int      @id @default(autoincrement())
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  nombre       String
+  activo       Boolean  @default(true)
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@map("proveedores")
+}
 ```
+
+`Solicitud.proveedorId` (ya en el schema) se rellena con el `Proveedor.id` cuando la entrega se hace por el panel web.
 
 - `canal` (param de servicio y columna de log): `'telegram_proveedor' | 'panel_web' | 'sistema'`.
 - `metodoEntrega` (columna de `Solicitud`): solo `'telegram_proveedor' | 'panel_web'` (nunca `'sistema'`).
@@ -203,8 +218,45 @@ Expone:
   - formato inválido (empieza con `NO ` pero el resto no es entero ni CURP de 18) → `"⚠️ Formato no válido. Usa: NO <id> o NO <CURP>."`
 - Cualquier otro texto que no empiece con `NO ` (o `no `): ignorar (200), sin ruido y sin ack.
 
-### 5. Endpoint del panel web para subir el PDF (`app/api/proveedor/solicitudes/[id]/entregar/route.ts`)
-**NO se construye en esta sesión** (requiere Auth.js). Guía para cuando se construya: seguir el patrón pass-through — recibir `multipart/form-data`, validar tamaño, reenviarlo inmediatamente como `multipart/form-data` a `sendDocument` de la Bot API, tomar el `file_id` de la respuesta de Telegram, pasarlo a `entregaActaService.entregar(id, file_id, 'panel_web')`, y descartar el buffer. Nunca usar `fs.writeFile` ni ningún cliente de storage.
+### 5. Panel web del proveedor
+
+**Auth (Auth.js v5, `next-auth@beta`):**
+- Provider **Credentials** (email + contraseña). `authorize` valida con Zod,
+  `prisma.proveedor.findUnique({ where: { email } })`, chequea `activo`, y
+  `bcryptjs.compare`. Devuelve `{ id, email, name, role: 'proveedor' }` o `null`.
+- Sesión **JWT** en cookie (`session.strategy = 'jwt'`), sin adapter de DB.
+- Config partida en dos: `auth.config.ts` (edge-safe, sin prisma/bcrypt, para el
+  `middleware.ts`) y `auth.ts` (config completa con el provider). `middleware.ts`
+  protege `/proveedor/**` (excepto `/proveedor/login`) redirigiendo a login.
+- Alta de cuentas: script CLI `npm run proveedor:crear` (no hay registro público).
+
+**Páginas (`app/proveedor/`):**
+- `/proveedor/login` — form email/contraseña → `signIn('credentials', ...)`.
+- `/proveedor` — lista las solicitudes en `enviado_proveedor` o
+  `no_encontrado_proveedor` (orden `enviadoProveedorAt` asc). Por fila: subir PDF
+  (form `multipart/form-data` a la ruta de abajo) o **"Marcar no encontrada"**
+  (server action → `entregaActaService.marcarNoEncontrado(id, 'panel_web', false)`
+  → `revalidatePath`).
+
+**Ruta de subida — `app/api/proveedor/solicitudes/[id]/entregar/route.ts`**
+(`runtime='nodejs'`, `dynamic='force-dynamic'`), patrón **pass-through**:
+- `await auth()`; sin sesión → `401`.
+- `await req.formData()` → toma el `File` (campo `archivo`). Valida: presente,
+  `type === 'application/pdf'` (o nombre `.pdf`), `size ≤ MAX_PDF_BYTES` (4 MB;
+  nota: límite ~4.5 MB de una función serverless de Vercel).
+- Llama `entregaActaService.entregarConEnvio(id, 'panel_web', (chatId) =>
+  telegramService.sendDocumentBinary({ chatId, file, filename, caption:
+  CAPTION_ENTREGA }), { proveedorId })`. El `File` se reenvía directo a
+  `sendDocument` de la Bot API y se descarta al terminar el request.
+- **Nunca** `fs.writeFile`, buffer a disco, bucket ni cola.
+- Éxito → `redirect('/proveedor?entregada=<id>', 303)`; error de validación →
+  `?error=...`.
+
+**Núcleo compartido:** `entregaActaService.entregarConEnvio(solicitudId, canal,
+enviar, opts?)` contiene el claim atómico y la reversión (misma lógica que la
+Regla 3); recibe un callback `enviar(chatId) => Promise<file_id>` que hace el
+envío real. `entregar(id, fileId, canal)` (flujo Telegram) queda como wrapper que
+pasa `() => telegramService.sendDocument({ ... })`.
 
 ### 6. Nunca automatizar scraping del sitio oficial de RENAPO
 No debe existir código que interactúe automáticamente con `consultas.curp.gob.mx` ni ningún portal gubernamental.
@@ -220,13 +272,13 @@ Ejemplos:
 - ❌ "Estamos emitiendo tu acta de nacimiento"
 - ✅ Aviso de no encontrado (final): "No fue posible completar la gestoría de tu acta de nacimiento. Te contactaremos para el reembolso."
 
-Aplica a: mensajes del bot, notificaciones al proveedor, textos del panel (cuando se construya), mensajes de error/estado, descripción del bot.
+Aplica a: mensajes del bot, notificaciones al proveedor, textos del panel web, mensajes de error/estado, descripción del bot.
 
 ## Servicio de Telegram (`lib/services/telegramService.ts`)
 Encapsular llamadas a la Bot API usando `fetch` nativo y `TELEGRAM_BOT_TOKEN`:
 - `sendMessage({ chatId, text })`
 - `sendDocument({ chatId, fileId, caption? })` — reenvío por `file_id`.
-- `sendDocument` variante que acepta `FormData` — para el pass-through del panel (aunque el endpoint no se construya esta sesión, el método sí puede existir).
+- `sendDocumentBinary({ chatId, file, filename, caption? })` — pass-through del panel: arma el `FormData` internamente y devuelve el `file_id` resultante.
 - `notificarAdmin(text)` — `sendMessage` a `ADMIN_TELEGRAM_CHAT_ID`.
 - NO incluir método de descarga de archivos (`getFile` + descarga binaria) — no se usa en ningún flujo.
 - Al construir payloads, convertir cualquier `BigInt` (`chatId`) a `string`/`Number` explícitamente.
@@ -237,7 +289,7 @@ Encapsular llamadas a la Bot API usando `fetch` nativo y `TELEGRAM_BOT_TOKEN`:
 3. `lib/services/entregaActaService.ts` con el patrón claim atómico (`entregando`) descrito en la Regla 3.
 4. `app/api/telegram/webhook/route.ts` — validación de secret, autorización de proveedor, manejo de documentos (file_id directo, reglas de caption) y del comando `NO <id|CURP>`; siempre responde 200; `runtime='nodejs'`.
 5. `app/api/dev/solicitudes/route.ts` — simulación del disparo a proveedor (Regla 2).
-6. `.env.example` con las 5 variables de la tabla de arriba.
+6. `.env.example` con todas las variables de la tabla de arriba.
 7. **Tests Vitest — `entregaActaService`:**
    - entrega exitosa (claim + sendDocument ok + estado `entregado` + log + notifica admin);
    - solicitud ya cerrada (`entregado`/`no_encontrado`) → `false`, log `entrega_rechazada`, sin error;
@@ -259,11 +311,19 @@ Encapsular llamadas a la Bot API usando `fetch` nativo y `TELEGRAM_BOT_TOKEN`:
    - comando `NO 123` sobre solicitud ya `entregado` → servicio devuelve `false`, ack `⚠️ ...ya está cerrada...` al proveedor;
    - comando `NO abc` (formato inválido) → ack `⚠️ Formato no válido...`, sin tocar la DB;
    - texto que no empieza con `NO ` → 200, sin ack ni efectos.
-9. **Estrategia de test**: mockear `global.fetch` (o inyectar/mockear `telegramService`) — ninguna llamada real a la Bot API. Base de datos: SQLite en memoria vía Prisma, o mock del cliente Prisma, según convenga a cada test.
+9. **Estrategia de test**: mockear `global.fetch` (o inyectar/mockear `telegramService`) — ninguna llamada real a la Bot API. Base de datos: mock del cliente Prisma (Prisma falso en memoria con `updateMany` condicional real).
+10. **Panel web del proveedor:** `auth.config.ts` + `auth.ts` (Auth.js v5) + `middleware.ts` + `app/api/auth/[...nextauth]/route.ts`; páginas `app/proveedor/login` y `app/proveedor` (+ layout, `actions.ts`, css); modelo `Proveedor` en el schema; `scripts/crear-proveedor.mjs` + script npm `proveedor:crear`.
+11. **Ruta de subida** `app/api/proveedor/solicitudes/[id]/entregar/route.ts` (pass-through) + refactor `entregaActaService.entregarConEnvio` + `telegramService.sendDocumentBinary`.
+12. **Tests Vitest — panel:**
+    - PDF válido con sesión → `sendDocumentBinary`, solicitud `entregado`, `metodoEntrega='panel_web'`, `proveedorId` seteado, log `entrega`, redirect 303;
+    - sin sesión → `401`, sin cambios;
+    - archivo no-PDF o mayor a `MAX_PDF_BYTES` → `4xx`, sin llamar a Telegram;
+    - solicitud ya cerrada → servicio devuelve `false`, redirect con `?error`;
+    - `entregarConEnvio` con `enviar` que lanza desde `no_encontrado_proveedor` → revierte a ese estado.
 
 ## Fuera de alcance en esta sesión
 - Flujo conversacional completo del bot para el usuario final (menús, captura de CURP, consulta de CURP).
 - Integración de pasarela de pago (se simula con el endpoint dev).
-- Panel web del proveedor: login, páginas, Auth.js y el endpoint de subida `app/api/proveedor/solicitudes/[id]/entregar/route.ts` — no se tocan.
+- Registro público de proveedores y gestión de cuentas desde el navegador (el alta es por CLI).
 - Comando del proveedor para marcar `no_encontrado` **final** (`esFinal=true`); esta sesión solo cubre el marcado interno vía comando.
 - Cualquier forma de storage o descarga de archivos — el sistema es intencionalmente "sin storage".
