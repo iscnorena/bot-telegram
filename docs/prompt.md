@@ -103,21 +103,24 @@ model SolicitudLog {
 
 ## Máquina de estados
 
-Transiciones válidas:
+> La **fuente de verdad** de la lógica de entrega es la Regla 3. Esta lista solo
+> enumera las transiciones permitidas; ante cualquier duda, manda el texto de la
+> Regla 3.
 
-```
-pendiente_curp ──► pagado ──► enviado_proveedor
-                                     │
-              ┌──────────────────────┼───────────────────────────┐
-              ▼                      ▼                           ▼
-        entregando            no_encontrado_proveedor        (permanece)
-          │     │                   │        │
-   éxito  │     │ fallo             │        │ (proveedor reintenta y entrega)
-          ▼     ▼                   ▼        ▼
-      entregado  └► (revierte a    no_encontrado   entregando ──► entregado
-                    enviado_proveedor
-                    o no_encontrado_proveedor)
-```
+Transiciones permitidas (`origen → destino` — quién la dispara):
+
+- `pendiente_curp → pagado` — flujo de pago (fuera de alcance).
+- `pagado → enviado_proveedor` — flujo de pago / endpoint dev.
+- `enviado_proveedor → entregando` — claim de `entregar()`.
+- `no_encontrado_proveedor → entregando` — claim de `entregar()` (el proveedor reintenta con éxito más tarde).
+- `entregando → entregado` — `sendDocument` exitoso.
+- `entregando → enviado_proveedor` — `sendDocument` falló; se revierte **exactamente al estado de origen** leído antes del claim.
+- `entregando → no_encontrado_proveedor` — `sendDocument` falló; se revierte **exactamente al estado de origen** leído antes del claim.
+- `enviado_proveedor → no_encontrado_proveedor` — `marcarNoEncontrado(esFinal=false)`.
+- `enviado_proveedor → no_encontrado` — `marcarNoEncontrado(esFinal=true)`.
+- `no_encontrado_proveedor → no_encontrado` — `marcarNoEncontrado(esFinal=true)`.
+
+Cualquier transición no listada es inválida y debe rechazarse (log `entrega_rechazada`, sin lanzar error).
 
 - **Estados cerrados** (rechazan cualquier nueva entrega/marcado, se registra el intento en `solicitud_logs` con `accion='entrega_rechazada'`, sin lanzar error): `entregado`, `no_encontrado`.
 - **`entregando`** es transitorio: mientras una solicitud esté en `entregando`, cualquier otro intento de reclamarla falla el claim atómico (no se hace doble envío).
@@ -149,13 +152,15 @@ Expone:
 
 **Patrón de entrega (claim atómico, sin llamadas de red dentro de una transacción):**
 
-1. **Claim**: `prisma.solicitud.updateMany({ where: { id: solicitudId, estado: { in: ['enviado_proveedor', 'no_encontrado_proveedor'] } }, data: { estado: 'entregando' } })`.
-   - Guardar el `estado` previo (leído justo antes, o inferido) para poder revertir.
+1. **Claim**:
+   - Leer el estado actual con `const previo = await prisma.solicitud.findUnique({ where: { id: solicitudId }, select: { estado: true, chatIdUsuario: true } })` **inmediatamente antes** del claim. Guardar `previo.estado` en una variable local — es el único valor válido para revertir si falla `sendDocument` (el `updateMany` no devuelve de cuál de los dos estados de origen venía).
+   - Claim atómico: `const { count } = await prisma.solicitud.updateMany({ where: { id: solicitudId, estado: { in: ['enviado_proveedor', 'no_encontrado_proveedor'] } }, data: { estado: 'entregando' } })`.
    - Si `count === 0`: la solicitud no estaba en un estado reclamable (ya cerrada, ya `entregando`, o inexistente). Registrar log `accion='entrega_rechazada'` con el motivo, **no lanzar error**, devolver `false`.
+   - Nota de carrera: entre el `findUnique` y el `updateMany` otro proceso podría cambiar el estado; por eso la condición `estado IN (...)` del `updateMany` es la que garantiza exclusión mutua. `previo.estado` solo se usa para la reversión y, si el `updateMany` tuvo `count === 1`, el estado de origen real está garantizado a ser uno de los dos de la lista.
 2. **Envío** (fuera de cualquier transacción): `telegramService.sendDocument({ chatId: chatIdUsuario, fileId, caption: <copy de entrega> })`.
 3. **Confirmación**:
    - Éxito → `update` a `estado='entregado'`, `entregadoAt=now()`, `fileIdEntregado=<file_id devuelto por sendDocument>`, `metodoEntrega=canal`; log `accion='entrega'`; `telegramService.notificarAdmin(...)`. Devolver `true`.
-   - Fallo de `sendDocument` → revertir `estado` al valor previo (`enviado_proveedor` o `no_encontrado_proveedor`); log `accion='error'` con el detalle; devolver `false`. (No relanzar: el webhook siempre responde 200.)
+   - Fallo de `sendDocument` → `update` a `estado: previo.estado` (el valor guardado en el paso 1, `enviado_proveedor` o `no_encontrado_proveedor`); log `accion='error'` con el detalle; devolver `false`. (No relanzar: el webhook siempre responde 200.)
 
 **`marcarNoEncontrado`:**
 - Rechazar si la solicitud ya está cerrada (`entregado` o `no_encontrado`) o en `entregando` → log `accion='entrega_rechazada'`, sin error, devolver `false`.
@@ -180,15 +185,21 @@ Expone:
     - 1 resultado → match.
     - >1 resultado → ambiguo.
   - Cualquier otra forma, o caption vacío → sin match.
-- Si **no hay caption, no hay match, o el match es ambiguo**: NO reenviar nada; `notificarAdmin` con el detalle (`file_id`, motivo, caption recibido); registrar en `solicitud_logs` (`accion='error'`, `canal='telegram_proveedor'`) si hay una solicitud identificable, o solo notificar al admin si no la hay.
+- Si **no hay caption, no hay match, o el match es ambiguo**: NO reenviar nada; `notificarAdmin` con el detalle (`file_id`, motivo, caption recibido); **ack al proveedor** con `sendMessage` (`"⚠️ Recibí el documento pero no pude identificar la solicitud (caption: «<caption>»). Reenvíalo con el ID de solicitud en el caption."`); registrar en `solicitud_logs` (`accion='error'`, `canal='telegram_proveedor'`) si hay una solicitud identificable, o solo notificar al admin si no la hay.
 - Si hay match: extraer `message.document.file_id` directo del payload (SIN `getFile` ni descarga) y llamar `entregaActaService.entregar(solicitudId, file_id, 'telegram_proveedor')`.
 
 **b) Comando de texto del proveedor (`message.text`):**
 - Formato: `NO <id|CURP>` (case-insensitive en la palabra `NO`, un solo espacio o varios). Ejemplos: `NO 123`, `no ABCD123456HDFXYZ01`.
-- Resolver `<id|CURP>` igual que el caption (entero → `id`; 18 alfanum → `curp` entre estados `enviado_proveedor`/`no_encontrado_proveedor`; ambigüedad → avisar admin, no actuar).
+- Resolver `<id|CURP>` igual que el caption (entero → `id`; 18 alfanum → `curp` entre estados `enviado_proveedor`/`no_encontrado_proveedor`).
 - Al resolver a una solicitud: llamar `entregaActaService.marcarNoEncontrado(solicitudId, 'telegram_proveedor', esFinal=false)`. (El paso a `no_encontrado` final lo decide el admin en otra vía; fuera de alcance el comando para `esFinal=true`.)
-- Registrar log `accion='comando_no_encontrado'`.
-- Cualquier otro texto que no haga match con el patrón: ignorar (200), sin ruido.
+- Registrar log `accion='comando_no_encontrado'` cuando el comando resuelva a una solicitud.
+- **Ack al proveedor** — tras todo comando `NO`, responder SIEMPRE al chat del proveedor (`sendMessage`) con el resultado, además de cualquier `notificarAdmin`:
+  - resuelto y `marcarNoEncontrado` devolvió `true` → `"✅ Solicitud #<id> marcada como no encontrada. Puedes reintentar la entrega más tarde."`
+  - resuelto pero `marcarNoEncontrado` devolvió `false` (solicitud ya cerrada o en `entregando`) → `"⚠️ La solicitud #<id> ya está cerrada o en proceso; no se hizo ningún cambio."`
+  - `id`/`CURP` sin coincidencia → `"⚠️ No encontré ninguna solicitud para «<valor>»."`
+  - `CURP` con match ambiguo (>1 solicitud abierta) → `"⚠️ «<CURP>» tiene varias solicitudes abiertas (#a, #b). Responde con NO <id>."` y `notificarAdmin` con el detalle; no actuar.
+  - formato inválido (empieza con `NO ` pero el resto no es entero ni CURP de 18) → `"⚠️ Formato no válido. Usa: NO <id> o NO <CURP>."`
+- Cualquier otro texto que no empiece con `NO ` (o `no `): ignorar (200), sin ruido y sin ack.
 
 ### 5. Endpoint del panel web para subir el PDF (`app/api/proveedor/solicitudes/[id]/entregar/route.ts`)
 **NO se construye en esta sesión** (requiere Auth.js). Guía para cuando se construya: seguir el patrón pass-through — recibir `multipart/form-data`, validar tamaño, reenviarlo inmediatamente como `multipart/form-data` a `sendDocument` de la Bot API, tomar el `file_id` de la respuesta de Telegram, pasarlo a `entregaActaService.entregar(id, file_id, 'panel_web')`, y descartar el buffer. Nunca usar `fs.writeFile` ni ningún cliente de storage.
@@ -229,7 +240,8 @@ Encapsular llamadas a la Bot API usando `fetch` nativo y `TELEGRAM_BOT_TOKEN`:
    - entrega exitosa (claim + sendDocument ok + estado `entregado` + log + notifica admin);
    - solicitud ya cerrada (`entregado`/`no_encontrado`) → `false`, log `entrega_rechazada`, sin error;
    - condición de carrera: dos llamadas `entregar` simultáneas sobre la misma solicitud → solo una hace el claim y entrega, la otra devuelve `false`;
-   - fallo de `sendDocument` → estado revertido al previo, log `error`, `false`;
+   - fallo de `sendDocument` partiendo de `enviado_proveedor` → estado revertido a `enviado_proveedor`, log `error`, `false`;
+   - fallo de `sendDocument` partiendo de `no_encontrado_proveedor` → estado revertido a `no_encontrado_proveedor` (no a `enviado_proveedor`), log `error`, `false`;
    - `marcarNoEncontrado(esFinal=false)` → `no_encontrado_proveedor`, sin aviso al usuario;
    - `marcarNoEncontrado(esFinal=true)` → `no_encontrado`, con aviso al usuario.
 8. **Tests Vitest — webhook:**
@@ -240,7 +252,11 @@ Encapsular llamadas a la Bot API usando `fetch` nativo y `TELEGRAM_BOT_TOKEN`:
    - match por ID → llama `entregar` con el `file_id` del payload;
    - match por CURP (1 solicitud) → llama `entregar`;
    - match por CURP ambiguo (>1 solicitud) → no reenvía, notifica admin;
-   - comando `NO 123` → llama `marcarNoEncontrado(123, 'telegram_proveedor', false)`.
+   - comando `NO 123` (resuelve) → llama `marcarNoEncontrado(123, 'telegram_proveedor', false)` y manda ack `✅` al proveedor;
+   - comando `NO 999` (id inexistente) → no llama al servicio, manda ack `⚠️ No encontré...` al proveedor;
+   - comando `NO 123` sobre solicitud ya `entregado` → servicio devuelve `false`, ack `⚠️ ...ya está cerrada...` al proveedor;
+   - comando `NO abc` (formato inválido) → ack `⚠️ Formato no válido...`, sin tocar la DB;
+   - texto que no empieza con `NO ` → 200, sin ack ni efectos.
 9. **Estrategia de test**: mockear `global.fetch` (o inyectar/mockear `telegramService`) — ninguna llamada real a la Bot API. Base de datos: SQLite en memoria vía Prisma, o mock del cliente Prisma, según convenga a cada test.
 
 ## Fuera de alcance en esta sesión
