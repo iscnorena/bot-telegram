@@ -98,8 +98,9 @@ Inspecciona el estado con `npx prisma studio`.
 ## Panel web del proveedor
 
 ```bash
-# Crear una cuenta de proveedor (pide la contraseña por consola)
-npm run proveedor:crear -- --email prov@dominio.mx --nombre "Nombre Visible"
+# Crear cuentas (piden la contraseña por consola)
+npm run proveedor:crear -- --email prov@dominio.mx --nombre "Proveedor Uno"
+npm run usuario:crear   -- --email admin@dominio.mx --nombre "Admin" --rol admin
 
 npm run dev
 # http://localhost:3000/proveedor  -> redirige a /proveedor/login
@@ -108,8 +109,22 @@ npm run dev
 Tras iniciar sesión, el panel lista las solicitudes en `enviado_proveedor` /
 `no_encontrado_proveedor`. Por cada una: **subir el PDF** del acta (se reenvía
 directo a Telegram sin guardarse en ningún lado) o **marcar como no encontrada**.
-La subida entrega con `metodoEntrega = 'panel_web'` y guarda el `Proveedor.id` en
+La subida entrega con `metodoEntrega = 'panel_web'` y guarda el `Usuario.id` en
 `solicitud.proveedorId`.
+
+## Panel de administración (`/admin`, rol admin)
+
+Corte semanal **lunes–domingo** (hora de Ciudad de México, UTC-6). Cada domingo
+se revisa lo entregado contra lo que factura el proveedor:
+
+1. `/admin/tarifas` — registra el costo del proveedor por trámite (con historial;
+   una tarifa nueva cierra la anterior).
+2. `/admin/servicios` — precio que paga la persona usuaria (por servicio).
+3. `/admin` — KPIs de la semana y últimas 8 semanas (entregadas, esperado,
+   facturado, diferencia).
+4. `/admin/cortes/<lunes YYYY-MM-DD>` — por cada entrega: captura **a mano** el
+   monto facturado; se ve la diferencia y el score. **Cerrar corte** congela
+   montos y totales (se puede **Reabrir**).
 
 ## Estructura
 
@@ -124,19 +139,23 @@ La subida entrega con `metodoEntrega = 'panel_web'` y guarda el `Proveedor.id` e
 | `lib/bot/flujoUsuario.ts` | Máquina del flujo conversacional del usuario (menú, CURP, consulta, `/simular_pago`). |
 | `lib/services/conversacionService.ts` / `solicitudService.ts` | Estado de conversación por chat / crear-enviar-consultar solicitudes. |
 | `lib/curp.ts` | Validación y normalización de CURP (formato local, sin RENAPO). |
-| `auth.ts` / `auth.config.ts` / `middleware.ts` | Auth.js v5: Credentials + tabla `Proveedor`, sesión JWT; el middleware protege `/proveedor/**`. |
-| `app/proveedor/` | Panel del proveedor: `login`, lista de solicitudes, acciones. |
+| `auth.ts` / `auth.config.ts` / `middleware.ts` | Auth.js v5: Credentials + tabla `Usuario` (rol), sesión JWT; el middleware protege `/proveedor/**` y `/admin/**`. |
+| `lib/sesion.ts` | `requireProveedor()` / `requireAdmin()`. |
+| `lib/corte.ts` / `lib/dinero.ts` | Semana del corte (CDMX) / formato y parseo de montos. |
+| `lib/services/conciliacionService.ts` / `tarifaService.ts` / `servicioService.ts` | Score del corte, tarifas del proveedor, precio del servicio. |
+| `app/proveedor/` / `app/admin/` | Panel del proveedor / panel de administración (conciliación). |
 | `app/api/proveedor/solicitudes/[id]/entregar/route.ts` | Subida del PDF (pass-through a Telegram). |
-| `app/api/telegram/webhook/route.ts` | Webhook: documentos del proveedor + comando `NO`. |
+| `app/api/telegram/webhook/route.ts` | Webhook: usuario (conversacional) + proveedor (documentos / comando `NO`). |
 | `app/api/dev/solicitudes/route.ts` | Simulación del disparo a proveedor (deshabilitado en producción). |
-| `scripts/crear-proveedor.mjs` | Alta de cuentas de proveedor por CLI. |
+| `scripts/crear-usuario.mjs` | Alta de cuentas (`--rol admin|proveedor`) por CLI. |
 | `test/` | Vitest con Prisma falso en memoria; sin llamadas reales de red. |
 
 ## Fuera de alcance en esta fase
 
 Pasarela de pago real (se simula con `/simular_pago`), registro/gestión de
-cuentas de proveedor desde el navegador, panel de administración, y el cierre
-"no encontrado" **final**. Ver `docs/prompt.md`.
+cuentas desde el navegador, alta de nuevos servicios por UI, multi-servicio en el
+bot, importación de facturas por archivo, y el cierre "no encontrado" **final**.
+Ver `docs/prompt.md`.
 
 ## Notas
 

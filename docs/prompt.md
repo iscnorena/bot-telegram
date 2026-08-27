@@ -98,16 +98,17 @@ model SolicitudLog {
   @@map("solicitud_logs")
 }
 
-model Proveedor {
+model Usuario {
   id           Int      @id @default(autoincrement())
   email        String   @unique
   passwordHash String   @map("password_hash")
   nombre       String
+  rol          String   @default("proveedor") // 'admin' | 'proveedor'
   activo       Boolean  @default(true)
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 
-  @@map("proveedores")
+  @@map("usuarios")
 }
 
 // Estado de la conversación de Telegram por chat (Telegram no guarda estado).
@@ -122,7 +123,23 @@ model Conversacion {
 }
 ```
 
-`Solicitud.proveedorId` (ya en el schema) se rellena con el `Proveedor.id` cuando la entrega se hace por el panel web.
+> El schema completo y vigente vive en `prisma/schema.prisma`. Además de lo de
+> arriba, incluye:
+>
+> - **`Servicio`** `{ slug, nombre, precioUsuario Decimal, activo }` — el precio
+>   al usuario final es configurable por servicio (reemplaza la constante
+>   `PRECIO_GESTORIA`). Seed: `acta_nacimiento`.
+> - **`Tarifa`** `{ usuarioId (proveedor), servicioId, monto Decimal, vigenteDesde,
+>   vigenteHasta? }` — costo que cobra el proveedor, con historial de vigencias.
+> - **`Corte`** `{ inicio, fin, cerradoAt?, cerradoPor?, total* }` — semana
+>   lunes–domingo (CDMX, UTC-6). Al cerrarse congela los totales.
+> - **`Solicitud`** gana `servicioId`, `costoProveedorEsperado` (congelado al
+>   cerrar el corte), `costoProveedorReal` (captura manual del admin),
+>   `facturadoAt/Por`, `corteId`.
+>
+> `Solicitud.proveedorId` referencia a `Usuario` (rol `proveedor`); se rellena en
+> la entrega por panel, y en la entrega por Telegram si hay exactamente un
+> proveedor activo (si no, lo asigna el admin desde el corte).
 
 - `canal` (param de servicio y columna de log): `'telegram_proveedor' | 'panel_web' | 'sistema'`.
 - `metodoEntrega` (columna de `Solicitud`): solo `'telegram_proveedor' | 'panel_web'` (nunca `'sistema'`).
@@ -254,13 +271,16 @@ Expone:
 
 **Auth (Auth.js v5, `next-auth@beta`):**
 - Provider **Credentials** (email + contraseña). `authorize` valida con Zod,
-  `prisma.proveedor.findUnique({ where: { email } })`, chequea `activo`, y
-  `bcryptjs.compare`. Devuelve `{ id, email, name, role: 'proveedor' }` o `null`.
+  `prisma.usuario.findUnique({ where: { email } })`, chequea `activo`, y
+  `bcryptjs.compare`. Devuelve `{ id, email, name, role: usuario.rol }` o `null`.
 - Sesión **JWT** en cookie (`session.strategy = 'jwt'`), sin adapter de DB.
+  `role` viaja en el token.
 - Config partida en dos: `auth.config.ts` (edge-safe, sin prisma/bcrypt, para el
   `middleware.ts`) y `auth.ts` (config completa con el provider). `middleware.ts`
-  protege `/proveedor/**` (excepto `/proveedor/login`) redirigiendo a login.
-- Alta de cuentas: script CLI `npm run proveedor:crear` (no hay registro público).
+  protege `/proveedor/**` (sesión) y `/admin/**` (rol `admin`; un proveedor
+  autenticado es redirigido a `/proveedor`).
+- Alta de cuentas: `npm run usuario:crear -- --rol admin|proveedor` (no hay
+  registro público). `lib/sesion.ts` expone `requireProveedor()` y `requireAdmin()`.
 
 **Páginas (`app/proveedor/`):**
 - `/proveedor/login` — form email/contraseña → `signIn('credentials', ...)`.
@@ -292,6 +312,41 @@ pasa `() => telegramService.sendDocument({ ... })`.
 
 ### 6. Nunca automatizar scraping del sitio oficial de RENAPO
 No debe existir código que interactúe automáticamente con `consultas.curp.gob.mx` ni ningún portal gubernamental.
+
+### 7. Conciliación semanal y panel de administración
+
+**Corte semanal** (`lib/corte.ts`): lunes 00:00 a domingo 23:59:59.999, hora de
+Ciudad de México (**UTC-6 fijo** — México sin horario de verano desde 2022). El
+proveedor entrega toda la semana y el corte se revisa los domingos.
+
+**`lib/services/conciliacionService.ts`**:
+- `filasDeCorte(semana)` — una fila por `Solicitud` `entregado` con `entregadoAt`
+  en el rango: `esperado` = `costoProveedorEsperado` congelado, o
+  `tarifaVigente(proveedor, servicio, entregadoAt)` mientras el corte esté
+  abierto; `real` = `costoProveedorReal`; `diferencia` = `real - esperado`.
+- `totales(filas)` — el "score": nEntregadas, nFacturadas, nSinConciliar,
+  nConDiferencia, ΣEsperado, ΣReal, ΣDiferencia.
+- `capturarFactura(solicitudId, monto, adminId)` — captura manual del costo que
+  el proveedor factura **por trámite**. Rechaza si la solicitud está en un corte
+  cerrado.
+- `cerrarCorte(semana, adminId)` — crea el `Corte`, congela
+  `costoProveedorEsperado` y `corteId` por solicitud, guarda los totales y marca
+  `cerradoAt/Por`. `reabrirCorte(id, adminId)` lo desbloquea.
+
+**`lib/services/tarifaService.ts`**: `tarifaVigente(...)`; `ponerTarifa(...)`
+(cierra la vigente y crea la nueva).
+
+**Panel `/admin/**`** (rol admin; mismo sistema visual que `/proveedor`):
+- `/admin` — KPIs de la semana en curso + lista de las últimas ~8 semanas
+  (rango, abierto/cerrado, score).
+- `/admin/cortes/[YYYY-MM-DD]` — tabla de entregas del corte con captura inline
+  del `real`, asignación de proveedor si falta, y botón **Cerrar / Reabrir corte**.
+- `/admin/tarifas` — tarifa vigente + historial por proveedor; alta de tarifa.
+- `/admin/servicios` — editar `nombre` y `precioUsuario` por servicio.
+- `app/admin/actions.ts` — server actions, todas con `requireAdmin()`.
+
+El precio que ve el usuario en el bot sale de `Servicio.precioUsuario` (ya no de
+una constante).
 
 ## Regla de copy — terminología legal obligatoria
 
@@ -357,7 +412,7 @@ Encapsular llamadas a la Bot API usando `fetch` nativo y `TELEGRAM_BOT_TOKEN`:
 13. **Flujo conversacional del usuario:** modelo `Conversacion` + `lib/curp.ts` +
     `lib/services/conversacionService.ts` + `lib/services/solicitudService.ts` +
     `lib/bot/flujoUsuario.ts`; enrutamiento proveedor/usuario en el webhook;
-    comando dev `/simular_pago`; `PRECIO_GESTORIA`/`MAX_REINTENTOS_CURP` en `lib/config.ts`.
+    comando dev `/simular_pago`; `MAX_REINTENTOS_CURP` en `lib/config.ts`.
 14. **Tests Vitest — flujo usuario:**
     - `/start` → bienvenida + teclado, `Conversacion` en `menu`;
     - botón Iniciar → `esperando_curp`, pide CURP;
@@ -367,10 +422,23 @@ Encapsular llamadas a la Bot API usando `fetch` nativo y `TELEGRAM_BOT_TOKEN`:
     - Consultar + CURP propia → estado; CURP de otro chat → sin resultados (privacidad);
     - texto no reconocido en `menu` → `noEntiendo`;
     - webhook: `/start` desde el chat del proveedor → flujo de usuario (no se ignora).
+15. **Conciliación + admin (Regla 7):** `Usuario`+rol / `Servicio` / `Tarifa` /
+    `Corte` en el schema + campos de conciliación en `Solicitud`; `lib/corte.ts`,
+    `lib/dinero.ts`, `lib/services/{servicioService,tarifaService,conciliacionService}.ts`;
+    `app/admin/**`; `lib/proveedorSesion.ts` → `lib/sesion.ts`;
+    `scripts/crear-proveedor.mjs` → `crear-usuario.mjs` con `--rol`.
+16. **Tests Vitest — conciliación / admin:**
+    - `tarifaVigente` elige por fecha; `ponerTarifa` cierra la anterior;
+    - `filasDeCorte` + `totales` calculan esperado/real/diferencia y el score;
+    - `capturarFactura` ok en corte abierto, rechaza en corte cerrado;
+    - `cerrarCorte` congela y bloquea; `reabrirCorte` desbloquea;
+    - `requireAdmin` redirige a `/proveedor` (rol proveedor) o a login (sin sesión).
 
 ## Fuera de alcance en esta sesión
 - Integración real de pasarela de pago (se simula con `/simular_pago` y el endpoint dev).
-- Registro público de proveedores y gestión de cuentas desde el navegador (el alta es por CLI).
-- Panel de administración.
+- Registro/gestión de cuentas desde el navegador (el alta es por CLI); alta de
+  **nuevos servicios** por UI (se hace por migración).
+- Multi-servicio en el bot (el flujo sigue siendo solo acta de nacimiento).
+- Importación de la factura del proveedor por archivo (se captura a mano, por trámite).
 - Comando/flujo para marcar `no_encontrado` **final** (`esFinal=true`); el sistema solo cubre el marcado interno.
 - Cualquier forma de storage o descarga de archivos — el sistema es intencionalmente "sin storage".
